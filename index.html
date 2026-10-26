@@ -1,61 +1,283 @@
-function doGet(e) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const rows = data.slice(1);
-  
-  const result = rows.map((row, index) => {
-    let obj = {};
-    headers.forEach((header, i) => {
-      obj[header] = row[i];
-    });
-    return obj;
-  });
-
-  return ContentService.createTextOutput(JSON.stringify(result))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function doPost(e) {
-  try {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    const payload = JSON.parse(e.postData.contents);
-    const action = payload.action; // "create", "update", "delete"
-    const record = payload.data;
-    
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    const allData = sheet.getDataRange().getValues();
-    
-    if (action === "create") {
-      const newRow = headers.map(header => record[header] !== undefined ? record[header] : "");
-      sheet.appendRow(newRow);
-      return ContentService.createTextOutput(JSON.stringify({status: "success", message: "Created"}));
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>設備管理台帳システム</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    :root {
+      --primary: #1e3a8a;
+      --primary-hover: #1e40af;
+      --secondary: #0d9488;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --text-sub: #475569;
+      --border: #cbd5e1;
+      --radius: 8px;
     }
-    
-    if (action === "update" || action === "delete") {
-      const idColIdx = headers.indexOf("ID");
-      let targetRowIdx = -1;
-      for (let i = 1; i < allData.length; i++) {
-        if (allData[i][idColIdx] == record.ID) {
-          targetRowIdx = i + 1; // 1-based index
-          break;
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", sans-serif; background-color: var(--bg); color: var(--text); padding: 24px; line-height: 1.5; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--border); padding-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+    .header h1 { font-size: 24px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+    .api-card { background: #fff; padding: 14px 18px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .api-card input { flex: 1; min-width: 280px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; }
+    .btn { padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: 0.2s; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: var(--secondary); color: #fff; }
+    .btn-outline { background: #fff; border: 1px solid var(--border); color: var(--text); }
+    .btn-danger { background: #ef4444; color: #fff; }
+    .table-container { background: var(--card-bg); border-radius: var(--radius); border: 1px solid var(--border); overflow-x: auto; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; white-space: nowrap; }
+    th { background: #f1f5f9; padding: 10px 14px; border-bottom: 2px solid var(--border); color: var(--text-sub); }
+    td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }
+    tr:hover { background-color: #f8fafc; }
+    .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; padding: 20px; }
+    .modal-box { background: #fff; border-radius: var(--radius); width: 100%; max-width: 800px; max-height: 90vh; overflow-y: auto; padding: 24px; }
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
+    .form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
+    .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1><i class="fa-solid fa-server"></i> 設備管理台帳システム</h1>
+    <div>
+      <button class="btn btn-secondary" onclick="openModal()"><i class="fa-solid fa-plus"></i> 新規設備登録</button>
+      <button class="btn btn-outline" onclick="loadData()"><i class="fa-solid fa-arrows-rotate"></i> 更新</button>
+    </div>
+  </div>
+
+  <div class="api-card">
+    <label style="font-weight:600; font-size:13px;"><i class="fa-solid fa-link"></i> スプレッドシート連携URL:</label>
+    <input type="text" id="apiUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
+    <button class="btn btn-primary" onclick="saveApiUrl()"><i class="fa-solid fa-floppy-disk"></i> 接続設定を保存</button>
+    <span id="apiStatus" style="font-size:12px; color:#16a34a; font-weight:600;"></span>
+  </div>
+
+  <div class="table-container">
+    <table id="assetTable">
+      <thead>
+        <tr>
+          <th>操作</th><th>No</th><th>分類</th><th>設備名</th><th>識別情報</th><th>設備管理元</th>
+          <th>管理場所</th><th>状態</th><th>取扱い方法</th><th>管理者</th><th>管理期間</th>
+          <th>返却日</th><th>管理周期</th><th>保護方法</th><th>防護方法</th><th>記録</th><th>備考</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+
+  <div class="modal-overlay" id="editModal">
+    <div class="modal-box">
+      <h2 id="modalTitle" style="font-size: 18px; color: var(--primary);">設備情報の登録</h2>
+      <input type="hidden" id="editId">
+      <div class="form-grid">
+        <div class="form-group"><label>No</label><input type="text" id="f_no"></div>
+        <div class="form-group"><label>分類</label><input type="text" id="f_category"></div>
+        <div class="form-group"><label>設備名</label><input type="text" id="f_name" required></div>
+        <div class="form-group"><label>識別情報(製造番号等)</label><input type="text" id="f_serial"></div>
+        <div class="form-group"><label>設備管理元</label><input type="text" id="f_origin"></div>
+        <div class="form-group"><label>管理場所</label><input type="text" id="f_location"></div>
+        <div class="form-group"><label>設備の状態</label><input type="text" id="f_status"></div>
+        <div class="form-group"><label>設備の取扱い方法</label><input type="text" id="f_handling"></div>
+        <div class="form-group"><label>管理者</label><input type="text" id="f_manager"></div>
+        <div class="form-group"><label>管理期間(申請)</label><input type="text" id="f_period"></div>
+        <div class="form-group"><label>返却日</label><input type="text" id="f_return_date"></div>
+        <div class="form-group"><label>管理周期</label><input type="text" id="f_cycle"></div>
+        <div class="form-group"><label>保護方法</label><input type="text" id="f_protection"></div>
+        <div class="form-group"><label>防護方法</label><input type="text" id="f_defense"></div>
+        <div class="form-group"><label>記録</label><input type="text" id="f_record"></div>
+        <div class="form-group" style="grid-column: 1 / -1;"><label>備考</label><textarea id="f_note" rows="2"></textarea></div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px;">
+        <button class="btn btn-outline" onclick="closeModal()">キャンセル</button>
+        <button class="btn btn-primary" onclick="submitData()"><i class="fa-solid fa-check"></i> 保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let assets = [];
+    const STORAGE_KEY = 'ledger_data_cache';
+    const API_URL_KEY = 'ledger_gas_api_url';
+
+    function init() {
+      const savedUrl = localStorage.getItem(API_URL_KEY) || "";
+      document.getElementById('apiUrlInput').value = savedUrl;
+      const cached = localStorage.getItem(STORAGE_KEY);
+      if (cached) {
+        assets = JSON.parse(cached);
+        renderTable();
+      }
+      if (savedUrl) {
+        loadData();
+      }
+    }
+
+    function saveApiUrl() {
+      const url = document.getElementById('apiUrlInput').value.trim();
+      localStorage.setItem(API_URL_KEY, url);
+      document.getElementById('apiStatus').innerText = "✓ 保存完了";
+      setTimeout(() => document.getElementById('apiStatus').innerText = "", 3000);
+      if (url) loadData();
+    }
+
+    async function loadData() {
+      const url = localStorage.getItem(API_URL_KEY);
+      if (!url) return;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        assets = data;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
+        renderTable();
+      } catch (err) {
+        console.error("データ取得エラー:", err);
+      }
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = '';
+      assets.forEach((item) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="editItem('${item.ID}')"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="deleteItem('${item.ID}')"><i class="fa-solid fa-trash"></i></button>
+          </td>
+          <td>${item['No'] || ''}</td>
+          <td>${item['分類'] || ''}</td>
+          <td><strong>${item['設備名'] || ''}</strong></td>
+          <td>${item['識別情報'] || ''}</td>
+          <td>${item['設備管理元'] || ''}</td>
+          <td>${item['管理場所'] || ''}</td>
+          <td>${item['設備の状態'] || ''}</td>
+          <td>${item['設備の取扱い方法'] || ''}</td>
+          <td>${item['管理者'] || ''}</td>
+          <td>${item['管理期間'] || ''}</td>
+          <td>${item['返却日'] || ''}</td>
+          <td>${item['管理周期'] || ''}</td>
+          <td>${item['保護方法'] || ''}</td>
+          <td>${item['防護方法'] || ''}</td>
+          <td>${item['記録'] || ''}</td>
+          <td>${item['備考'] || ''}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function openModal() {
+      document.getElementById('modalTitle').innerText = '設備情報の登録';
+      document.getElementById('editId').value = '';
+      ['no','category','name','serial','origin','location','status','handling','manager','period','return_date','cycle','protection','defense','record','note'].forEach(k => {
+        document.getElementById('f_' + k).value = '';
+      });
+      document.getElementById('editModal').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('editModal').style.display = 'none';
+    }
+
+    function editItem(id) {
+      const item = assets.find(a => a.ID == id);
+      if (!item) return;
+      document.getElementById('modalTitle').innerText = '設備情報の編集';
+      document.getElementById('editId').value = item.ID;
+      document.getElementById('f_no').value = item['No'] || '';
+      document.getElementById('f_category').value = item['分類'] || '';
+      document.getElementById('f_name').value = item['設備名'] || '';
+      document.getElementById('f_serial').value = item['識別情報'] || '';
+      document.getElementById('f_origin').value = item['設備管理元'] || '';
+      document.getElementById('f_location').value = item['管理場所'] || '';
+      document.getElementById('f_status').value = item['設備の状態'] || '';
+      document.getElementById('f_handling').value = item['設備の取扱い方法'] || '';
+      document.getElementById('f_manager').value = item['管理者'] || '';
+      document.getElementById('f_period').value = item['管理期間'] || '';
+      document.getElementById('f_return_date').value = item['返却日'] || '';
+      document.getElementById('f_cycle').value = item['管理周期'] || '';
+      document.getElementById('f_protection').value = item['保護方法'] || '';
+      document.getElementById('f_defense').value = item['防護方法'] || '';
+      document.getElementById('f_record').value = item['記録'] || '';
+      document.getElementById('f_note').value = item['備考'] || '';
+      document.getElementById('editModal').style.display = 'flex';
+    }
+
+    async function submitData() {
+      const id = document.getElementById('editId').value || 'ID_' + Date.now();
+      const record = {
+        ID: id,
+        'No': document.getElementById('f_no').value,
+        '分類': document.getElementById('f_category').value,
+        '設備名': document.getElementById('f_name').value,
+        '識別情報': document.getElementById('f_serial').value,
+        '設備管理元': document.getElementById('f_origin').value,
+        '管理場所': document.getElementById('f_location').value,
+        '設備の状態': document.getElementById('f_status').value,
+        '設備の取扱い方法': document.getElementById('f_handling').value,
+        '管理者': document.getElementById('f_manager').value,
+        '管理期間': document.getElementById('f_period').value,
+        '返却日': document.getElementById('f_return_date').value,
+        '管理周期': document.getElementById('f_cycle').value,
+        '保護方法': document.getElementById('f_protection').value,
+        '防護方法': document.getElementById('f_defense').value,
+        '記録': document.getElementById('f_record').value,
+        '備考': document.getElementById('f_note').value
+      };
+
+      const isEdit = Boolean(document.getElementById('editId').value);
+      if (isEdit) {
+        const idx = assets.findIndex(a => a.ID == id);
+        if (idx !== -1) assets[idx] = record;
+      } else {
+        assets.push(record);
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
+      renderTable();
+      closeModal();
+
+      const apiUrl = localStorage.getItem(API_URL_KEY);
+      if (apiUrl) {
+        try {
+          await fetch(apiUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: isEdit ? 'update' : 'create', data: record })
+          });
+        } catch (e) {
+          console.error(e);
         }
       }
-      
-      if (targetRowIdx !== -1) {
-        if (action === "update") {
-          const updatedRow = headers.map(header => record[header] !== undefined ? record[header] : "");
-          sheet.getRange(targetRowIdx, 1, 1, headers.length).setValues([updatedRow]);
-          return ContentService.createTextOutput(JSON.stringify({status: "success", message: "Updated"}));
-        } else if (action === "delete") {
-          sheet.deleteRow(targetRowIdx);
-          return ContentService.createTextOutput(JSON.stringify({status: "success", message: "Deleted"}));
+    }
+
+    async function deleteItem(id) {
+      if (!confirm('このデータを削除してもよろしいですか？')) return;
+      assets = assets.filter(a => a.ID != id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
+      renderTable();
+
+      const apiUrl = localStorage.getItem(API_URL_KEY);
+      if (apiUrl) {
+        try {
+          await fetch(apiUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete', data: { ID: id } })
+          });
+        } catch (e) {
+          console.error(e);
         }
       }
     }
-    
-    return ContentService.createTextOutput(JSON.stringify({status: "not_found"}));
-  } catch (error) {
-    return ContentService.createTextOutput(JSON.stringify({status: "error", error: error.toString()}));
-  }
-}
+
+    window.onload = init;
+  </script>
+</body>
+</html>
