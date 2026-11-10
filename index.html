@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>設備管理台帳システム</title>
+  <title>設備管理台帳システム (Firebase版)</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Firebase SDK (v9 compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <style>
     :root {
       --primary: #1e3a8a;
@@ -21,8 +24,12 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", sans-serif; background-color: var(--bg); color: var(--text); padding: 24px; line-height: 1.5; }
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--border); padding-bottom: 16px; flex-wrap: wrap; gap: 12px; }
     .header h1 { font-size: 24px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
-    .api-card { background: #fff; padding: 14px 18px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .api-card input { flex: 1; min-width: 280px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; }
+    .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+    .status-badge.online { background: #dcfce7; color: #166534; }
+    .status-badge.offline { background: #fee2e2; color: #991b1b; }
+    .config-card { background: #fff; padding: 14px 18px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 20px; }
+    .config-card summary { font-weight: 600; cursor: pointer; color: var(--primary); }
+    .config-card textarea { width: 100%; height: 90px; margin-top: 10px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 12px; }
     .btn { padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: 0.2s; }
     .btn-primary { background: var(--primary); color: #fff; }
     .btn-primary:hover { background: var(--primary-hover); }
@@ -38,25 +45,33 @@
     .modal-box { background: #fff; border-radius: var(--radius); width: 100%; max-width: 800px; max-height: 90vh; overflow-y: auto; padding: 24px; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
     .form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
-    .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+    .form-group input, .form-group textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
   </style>
 </head>
 <body>
 
   <div class="header">
-    <h1><i class="fa-solid fa-server"></i> 設備管理台帳システム</h1>
+    <div>
+      <h1><i class="fa-solid fa-server"></i> 設備管理台帳システム</h1>
+      <span id="syncBadge" class="status-badge offline" style="margin-top:6px;">
+        <i class="fa-solid fa-circle" style="font-size:8px;"></i> 未接続
+      </span>
+    </div>
     <div>
       <button class="btn btn-secondary" onclick="openModal()"><i class="fa-solid fa-plus"></i> 新規設備登録</button>
-      <button class="btn btn-outline" onclick="loadData()"><i class="fa-solid fa-arrows-rotate"></i> 更新</button>
     </div>
   </div>
 
-  <div class="api-card">
-    <label style="font-weight:600; font-size:13px;"><i class="fa-solid fa-link"></i> スプレッドシート連携URL:</label>
-    <input type="text" id="apiUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
-    <button class="btn btn-primary" onclick="saveApiUrl()"><i class="fa-solid fa-floppy-disk"></i> 接続設定を保存</button>
-    <span id="apiStatus" style="font-size:12px; color:#16a34a; font-weight:600;"></span>
-  </div>
+  <details class="config-card" id="configSection">
+    <summary><i class="fa-solid fa-gear"></i> Firebase 接続設定 (クリックして展開)</summary>
+    <div style="margin-top:10px;">
+      <p style="font-size:12px; color:var(--text-sub);">Firebaseコンソールで取得した <code>firebaseConfig</code> のJSON（またはJSオブジェクト）を貼り付けてください：</p>
+      <textarea id="configInput" placeholder='{"apiKey": "AIza...", "projectId": "...", ...}'></textarea>
+      <div style="margin-top:8px;">
+        <button class="btn btn-primary" onclick="saveAndConnectFirebase()"><i class="fa-solid fa-link"></i> 接続して保存</button>
+      </div>
+    </div>
+  </details>
 
   <div class="table-container">
     <table id="assetTable">
@@ -71,10 +86,11 @@
     </table>
   </div>
 
+  <!-- 登録・編集モーダル -->
   <div class="modal-overlay" id="editModal">
     <div class="modal-box">
       <h2 id="modalTitle" style="font-size: 18px; color: var(--primary);">設備情報の登録</h2>
-      <input type="hidden" id="editId">
+      <input type="hidden" id="editDocId">
       <div class="form-grid">
         <div class="form-group"><label>No</label><input type="text" id="f_no"></div>
         <div class="form-group"><label>分類</label><input type="text" id="f_category"></div>
@@ -101,42 +117,77 @@
   </div>
 
   <script>
+    // ※Configをコードに直書きしたい場合は以下の波括弧内に貼り付けてください
+    const EMBEDDED_FIREBASE_CONFIG = null;
+
+    let db = null;
     let assets = [];
-    const STORAGE_KEY = 'ledger_data_cache';
-    const API_URL_KEY = 'ledger_gas_api_url';
+    const CONFIG_KEY = 'ledger_firebase_config_raw';
 
     function init() {
-      const savedUrl = localStorage.getItem(API_URL_KEY) || "";
-      document.getElementById('apiUrlInput').value = savedUrl;
-      const cached = localStorage.getItem(STORAGE_KEY);
-      if (cached) {
-        assets = JSON.parse(cached);
-        renderTable();
+      let config = EMBEDDED_FIREBASE_CONFIG;
+      if (!config) {
+        const stored = localStorage.getItem(CONFIG_KEY);
+        if (stored) {
+          try { config = JSON.parse(stored); } catch (e) {}
+        }
       }
-      if (savedUrl) {
-        loadData();
+      if (config) {
+        document.getElementById('configInput').value = JSON.stringify(config, null, 2);
+        connectFirebase(config);
       }
     }
 
-    function saveApiUrl() {
-      const url = document.getElementById('apiUrlInput').value.trim();
-      localStorage.setItem(API_URL_KEY, url);
-      document.getElementById('apiStatus').innerText = "✓ 保存完了";
-      setTimeout(() => document.getElementById('apiStatus').innerText = "", 3000);
-      if (url) loadData();
-    }
-
-    async function loadData() {
-      const url = localStorage.getItem(API_URL_KEY);
-      if (!url) return;
+    function saveAndConnectFirebase() {
+      const input = document.getElementById('configInput').value.trim();
       try {
-        const res = await fetch(url);
-        const data = await res.json();
-        assets = data;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
-        renderTable();
+        let jsonStr = input;
+        if (!jsonStr.startsWith('{')) {
+          jsonStr = jsonStr.substring(jsonStr.indexOf('{'), jsonStr.lastIndexOf('}') + 1);
+        }
+        // オブジェクトのキーをJSON形式に補正
+        jsonStr = jsonStr.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":').replace(/'/g, '"');
+        const config = JSON.parse(jsonStr);
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+        connectFirebase(config);
+      } catch (e) {
+        alert("設定の解析に失敗しました。Firebase Config の形式を確認してください。");
+      }
+    }
+
+    function connectFirebase(config) {
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(config);
+        }
+        db = firebase.firestore();
+
+        // リアルタイムリスナーの登録 (onSnapshot)
+        db.collection("assets").orderBy("no", "asc").onSnapshot((snapshot) => {
+          assets = [];
+          snapshot.forEach((doc) => {
+            assets.push({ docId: doc.id, ...doc.data() });
+          });
+          renderTable();
+          updateBadge(true);
+        }, (error) => {
+          console.error("Firestore同期エラー:", error);
+          updateBadge(false);
+        });
       } catch (err) {
-        console.error("データ取得エラー:", err);
+        console.error("Firebase初期化エラー:", err);
+        updateBadge(false);
+      }
+    }
+
+    function updateBadge(isOnline) {
+      const badge = document.getElementById('syncBadge');
+      if (isOnline) {
+        badge.className = "status-badge online";
+        badge.innerHTML = '<i class="fa-solid fa-circle" style="font-size:8px;"></i> クラウド同期中 (リアルタイム)';
+      } else {
+        badge.className = "status-badge offline";
+        badge.innerHTML = '<i class="fa-solid fa-circle" style="font-size:8px;"></i> 未接続';
       }
     }
 
@@ -147,25 +198,25 @@
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>
-            <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="editItem('${item.ID}')"><i class="fa-solid fa-pen"></i></button>
-            <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="deleteItem('${item.ID}')"><i class="fa-solid fa-trash"></i></button>
+            <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="editItem('${item.docId}')"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="deleteItem('${item.docId}')"><i class="fa-solid fa-trash"></i></button>
           </td>
-          <td>${item['No'] || ''}</td>
-          <td>${item['分類'] || ''}</td>
-          <td><strong>${item['設備名'] || ''}</strong></td>
-          <td>${item['識別情報'] || ''}</td>
-          <td>${item['設備管理元'] || ''}</td>
-          <td>${item['管理場所'] || ''}</td>
-          <td>${item['設備の状態'] || ''}</td>
-          <td>${item['設備の取扱い方法'] || ''}</td>
-          <td>${item['管理者'] || ''}</td>
-          <td>${item['管理期間'] || ''}</td>
-          <td>${item['返却日'] || ''}</td>
-          <td>${item['管理周期'] || ''}</td>
-          <td>${item['保護方法'] || ''}</td>
-          <td>${item['防護方法'] || ''}</td>
-          <td>${item['記録'] || ''}</td>
-          <td>${item['備考'] || ''}</td>
+          <td>${item.no || ''}</td>
+          <td>${item.category || ''}</td>
+          <td><strong>${item.name || ''}</strong></td>
+          <td>${item.serial || ''}</td>
+          <td>${item.origin || ''}</td>
+          <td>${item.location || ''}</td>
+          <td>${item.status || ''}</td>
+          <td>${item.handling || ''}</td>
+          <td>${item.manager || ''}</td>
+          <td>${item.period || ''}</td>
+          <td>${item.return_date || ''}</td>
+          <td>${item.cycle || ''}</td>
+          <td>${item.protection || ''}</td>
+          <td>${item.defense || ''}</td>
+          <td>${item.record || ''}</td>
+          <td>${item.note || ''}</td>
         `;
         tbody.appendChild(tr);
       });
@@ -173,7 +224,7 @@
 
     function openModal() {
       document.getElementById('modalTitle').innerText = '設備情報の登録';
-      document.getElementById('editId').value = '';
+      document.getElementById('editDocId').value = '';
       ['no','category','name','serial','origin','location','status','handling','manager','period','return_date','cycle','protection','defense','record','note'].forEach(k => {
         document.getElementById('f_' + k).value = '';
       });
@@ -184,96 +235,74 @@
       document.getElementById('editModal').style.display = 'none';
     }
 
-    function editItem(id) {
-      const item = assets.find(a => a.ID == id);
+    function editItem(docId) {
+      const item = assets.find(a => a.docId === docId);
       if (!item) return;
       document.getElementById('modalTitle').innerText = '設備情報の編集';
-      document.getElementById('editId').value = item.ID;
-      document.getElementById('f_no').value = item['No'] || '';
-      document.getElementById('f_category').value = item['分類'] || '';
-      document.getElementById('f_name').value = item['設備名'] || '';
-      document.getElementById('f_serial').value = item['識別情報'] || '';
-      document.getElementById('f_origin').value = item['設備管理元'] || '';
-      document.getElementById('f_location').value = item['管理場所'] || '';
-      document.getElementById('f_status').value = item['設備の状態'] || '';
-      document.getElementById('f_handling').value = item['設備の取扱い方法'] || '';
-      document.getElementById('f_manager').value = item['管理者'] || '';
-      document.getElementById('f_period').value = item['管理期間'] || '';
-      document.getElementById('f_return_date').value = item['返却日'] || '';
-      document.getElementById('f_cycle').value = item['管理周期'] || '';
-      document.getElementById('f_protection').value = item['保護方法'] || '';
-      document.getElementById('f_defense').value = item['防護方法'] || '';
-      document.getElementById('f_record').value = item['記録'] || '';
-      document.getElementById('f_note').value = item['備考'] || '';
+      document.getElementById('editDocId').value = item.docId;
+      document.getElementById('f_no').value = item.no || '';
+      document.getElementById('f_category').value = item.category || '';
+      document.getElementById('f_name').value = item.name || '';
+      document.getElementById('f_serial').value = item.serial || '';
+      document.getElementById('f_origin').value = item.origin || '';
+      document.getElementById('f_location').value = item.location || '';
+      document.getElementById('f_status').value = item.status || '';
+      document.getElementById('f_handling').value = item.handling || '';
+      document.getElementById('f_manager').value = item.manager || '';
+      document.getElementById('f_period').value = item.period || '';
+      document.getElementById('f_return_date').value = item.return_date || '';
+      document.getElementById('f_cycle').value = item.cycle || '';
+      document.getElementById('f_protection').value = item.protection || '';
+      document.getElementById('f_defense').value = item.defense || '';
+      document.getElementById('f_record').value = item.record || '';
+      document.getElementById('f_note').value = item.note || '';
       document.getElementById('editModal').style.display = 'flex';
     }
 
     async function submitData() {
-      const id = document.getElementById('editId').value || 'ID_' + Date.now();
+      if (!db) {
+        alert('Firebase に接続されていません。接続設定を行ってください。');
+        return;
+      }
+      const docId = document.getElementById('editDocId').value;
       const record = {
-        ID: id,
-        'No': document.getElementById('f_no').value,
-        '分類': document.getElementById('f_category').value,
-        '設備名': document.getElementById('f_name').value,
-        '識別情報': document.getElementById('f_serial').value,
-        '設備管理元': document.getElementById('f_origin').value,
-        '管理場所': document.getElementById('f_location').value,
-        '設備の状態': document.getElementById('f_status').value,
-        '設備の取扱い方法': document.getElementById('f_handling').value,
-        '管理者': document.getElementById('f_manager').value,
-        '管理期間': document.getElementById('f_period').value,
-        '返却日': document.getElementById('f_return_date').value,
-        '管理周期': document.getElementById('f_cycle').value,
-        '保護方法': document.getElementById('f_protection').value,
-        '防護方法': document.getElementById('f_defense').value,
-        '記録': document.getElementById('f_record').value,
-        '備考': document.getElementById('f_note').value
+        no: document.getElementById('f_no').value,
+        category: document.getElementById('f_category').value,
+        name: document.getElementById('f_name').value,
+        serial: document.getElementById('f_serial').value,
+        origin: document.getElementById('f_origin').value,
+        location: document.getElementById('f_location').value,
+        status: document.getElementById('f_status').value,
+        handling: document.getElementById('f_handling').value,
+        manager: document.getElementById('f_manager').value,
+        period: document.getElementById('f_period').value,
+        return_date: document.getElementById('f_return_date').value,
+        cycle: document.getElementById('f_cycle').value,
+        protection: document.getElementById('f_protection').value,
+        defense: document.getElementById('f_defense').value,
+        record: document.getElementById('f_record').value,
+        note: document.getElementById('f_note').value,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
 
-      const isEdit = Boolean(document.getElementById('editId').value);
-      if (isEdit) {
-        const idx = assets.findIndex(a => a.ID == id);
-        if (idx !== -1) assets[idx] = record;
-      } else {
-        assets.push(record);
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
-      renderTable();
-      closeModal();
-
-      const apiUrl = localStorage.getItem(API_URL_KEY);
-      if (apiUrl) {
-        try {
-          await fetch(apiUrl, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: isEdit ? 'update' : 'create', data: record })
-          });
-        } catch (e) {
-          console.error(e);
+      try {
+        if (docId) {
+          await db.collection("assets").doc(docId).update(record);
+        } else {
+          await db.collection("assets").add(record);
         }
+        closeModal();
+      } catch (err) {
+        alert("保存に失敗しました: " + err.message);
       }
     }
 
-    async function deleteItem(id) {
+    async function deleteItem(docId) {
       if (!confirm('このデータを削除してもよろしいですか？')) return;
-      assets = assets.filter(a => a.ID != id);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
-      renderTable();
-
-      const apiUrl = localStorage.getItem(API_URL_KEY);
-      if (apiUrl) {
-        try {
-          await fetch(apiUrl, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'delete', data: { ID: id } })
-          });
-        } catch (e) {
-          console.error(e);
-        }
+      try {
+        await db.collection("assets").doc(docId).delete();
+      } catch (err) {
+        alert("削除に失敗しました: " + err.message);
       }
     }
 
