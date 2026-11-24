@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>設備管理台帳システム (Firebase連携)</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <!-- Firebase SDK (v9 compat) -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <style>
@@ -55,4 +54,273 @@
     <div>
       <h1><i class="fa-solid fa-server"></i> 設備管理台帳システム</h1>
       <span id="syncBadge" class="status-badge offline" style="margin-top:6px;">
-        <i class="fa-solid fa-circle" style="font
+        <i class="fa-solid fa-circle" style="font-size:8px;"></i> 接続中...
+      </span>
+    </div>
+    <div>
+      <button class="btn btn-secondary" onclick="openModal()"><i class="fa-solid fa-plus"></i> 新規設備登録</button>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <table id="assetTable">
+      <thead>
+        <tr>
+          <th>操作</th><th>No</th><th>分類</th><th>設備名</th><th>識別情報</th><th>設備管理元</th>
+          <th>管理場所</th><th>状態</th><th>取扱い方法</th><th>管理者</th><th>管理期間</th>
+          <th>返却日</th><th>管理周期</th><th>保護方法</th><th>防護方法</th><th>記録</th><th>備考</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+    <div id="emptyMessage" class="empty-state" style="display:none;">データが登録されていません。「新規設備登録」ボタンから登録してください。</div>
+  </div>
+
+  <div class="modal-overlay" id="editModal">
+    <div class="modal-box">
+      <h2 id="modalTitle" style="font-size: 18px; color: var(--primary);">設備情報の登録</h2>
+      <form id="assetForm" onsubmit="event.preventDefault(); submitData();">
+        <input type="hidden" id="editDocId">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>No <span class="auto-badge">自動採番</span></label>
+            <input type="text" id="f_no" readonly>
+          </div>
+          <div class="form-group">
+            <label>分類 <span class="req-badge">必須</span></label>
+            <input type="text" id="f_category" required placeholder="例: 開発用PC">
+          </div>
+          <div class="form-group">
+            <label>設備名 <span class="req-badge">必須</span></label>
+            <input type="text" id="f_name" required placeholder="例: 【借用端末】NEC PC-...">
+          </div>
+          <div class="form-group">
+            <label>識別情報(製造番号等) <span class="req-badge">必須</span></label>
+            <input type="text" id="f_serial" required placeholder="例: シリアルNo:...">
+          </div>
+          <div class="form-group"><label>設備管理元</label><input type="text" id="f_origin"></div>
+          <div class="form-group"><label>管理場所</label><input type="text" id="f_location"></div>
+          <div class="form-group"><label>設備の状態</label><input type="text" id="f_status"></div>
+          <div class="form-group"><label>設備の取扱い方法</label><input type="text" id="f_handling"></div>
+          <div class="form-group"><label>管理者</label><input type="text" id="f_manager"></div>
+          <div class="form-group"><label>管理期間(申請)</label><input type="text" id="f_period"></div>
+          <div class="form-group"><label>返却日</label><input type="text" id="f_return_date"></div>
+          <div class="form-group"><label>管理周期</label><input type="text" id="f_cycle"></div>
+          <div class="form-group"><label>保護方法</label><input type="text" id="f_protection"></div>
+          <div class="form-group"><label>防護方法</label><input type="text" id="f_defense"></div>
+          <div class="form-group"><label>記録</label><input type="text" id="f_record"></div>
+          <div class="form-group" style="grid-column: 1 / -1;"><label>備考</label><textarea id="f_note" rows="2"></textarea></div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px;">
+          <button type="button" class="btn btn-outline" onclick="closeModal()">キャンセル</button>
+          <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i> 保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDKekQzl_Q0EzAt8WDhGMyPFSASVkvL4OM",
+      authDomain: "shisankanri-daicho-web.firebaseapp.com",
+      projectId: "shisankanri-daicho-web",
+      storageBucket: "shisankanri-daicho-web.firebasestorage.app",
+      messagingSenderId: "936797966154",
+      appId: "1:936797966154:web:785d195d36948cf5f9bbb3",
+      measurementId: "G-NY9GKTY7GT"
+    };
+
+    let db = null;
+    let assets = [];
+
+    function init() {
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(firebaseConfig);
+        }
+        db = firebase.firestore();
+
+        db.collection("assets").onSnapshot((snapshot) => {
+          assets = [];
+          snapshot.forEach((doc) => {
+            assets.push({ docId: doc.id, ...doc.data() });
+          });
+          assets.sort((a, b) => {
+            const numA = parseInt(a.no, 10);
+            const numB = parseInt(b.no, 10);
+            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+            return String(a.no || '').localeCompare(String(b.no || ''));
+          });
+          renderTable();
+          updateBadge(true);
+        }, (error) => {
+          console.error("Firestore同期エラー:", error);
+          updateBadge(false, error.message);
+        });
+      } catch (err) {
+        console.error("初期化エラー:", err);
+        updateBadge(false, err.message);
+      }
+    }
+
+    function updateBadge(isOnline, errMsg = "") {
+      const badge = document.getElementById('syncBadge');
+      if (isOnline) {
+        badge.className = "status-badge online";
+        badge.innerHTML = '<i class="fa-solid fa-circle" style="font-size:8px;"></i> クラウド同期中 (リアルタイム)';
+      } else {
+        badge.className = "status-badge offline";
+        badge.innerHTML = `<i class="fa-solid fa-circle" style="font-size:8px;"></i> 未接続 ${errMsg ? `(${errMsg})` : ''}`;
+      }
+    }
+
+    function getNextNo() {
+      if (assets.length === 0) return "1";
+      let maxNo = 0;
+      assets.forEach(item => {
+        const num = parseInt(item.no, 10);
+        if (!isNaN(num) && num > maxNo) {
+          maxNo = num;
+        }
+      });
+      return String(maxNo + 1);
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('tableBody');
+      const emptyMsg = document.getElementById('emptyMessage');
+      tbody.innerHTML = '';
+      
+      if (assets.length === 0) {
+        emptyMsg.style.display = 'block';
+        return;
+      }
+      emptyMsg.style.display = 'none';
+
+      assets.forEach((item) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="editItem('${item.docId}')"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="deleteItem('${item.docId}')"><i class="fa-solid fa-trash"></i></button>
+          </td>
+          <td>${item.no || ''}</td>
+          <td>${item.category || ''}</td>
+          <td><strong>${item.name || ''}</strong></td>
+          <td>${item.serial || ''}</td>
+          <td>${item.origin || ''}</td>
+          <td>${item.location || ''}</td>
+          <td>${item.status || ''}</td>
+          <td>${item.handling || ''}</td>
+          <td>${item.manager || ''}</td>
+          <td>${item.period || ''}</td>
+          <td>${item.return_date || ''}</td>
+          <td>${item.cycle || ''}</td>
+          <td>${item.protection || ''}</td>
+          <td>${item.defense || ''}</td>
+          <td>${item.record || ''}</td>
+          <td>${item.note || ''}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function openModal() {
+      document.getElementById('modalTitle').innerText = '設備情報の登録';
+      document.getElementById('editDocId').value = '';
+      ['category','name','serial','origin','location','status','handling','manager','period','return_date','cycle','protection','defense','record','note'].forEach(k => {
+        document.getElementById('f_' + k).value = '';
+      });
+      document.getElementById('f_no').value = getNextNo();
+      document.getElementById('editModal').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('editModal').style.display = 'none';
+    }
+
+    function editItem(docId) {
+      const item = assets.find(a => a.docId === docId);
+      if (!item) return;
+      document.getElementById('modalTitle').innerText = '設備情報の編集';
+      document.getElementById('editDocId').value = item.docId;
+      document.getElementById('f_no').value = item.no || '';
+      document.getElementById('f_category').value = item.category || '';
+      document.getElementById('f_name').value = item.name || '';
+      document.getElementById('f_serial').value = item.serial || '';
+      document.getElementById('f_origin').value = item.origin || '';
+      document.getElementById('f_location').value = item.location || '';
+      document.getElementById('f_status').value = item.status || '';
+      document.getElementById('f_handling').value = item.handling || '';
+      document.getElementById('f_manager').value = item.manager || '';
+      document.getElementById('f_period').value = item.period || '';
+      document.getElementById('f_return_date').value = item.return_date || '';
+      document.getElementById('f_cycle').value = item.cycle || '';
+      document.getElementById('f_protection').value = item.protection || '';
+      document.getElementById('f_defense').value = item.defense || '';
+      document.getElementById('f_record').value = item.record || '';
+      document.getElementById('f_note').value = item.note || '';
+      document.getElementById('editModal').style.display = 'flex';
+    }
+
+    async function submitData() {
+      if (!db) {
+        alert('データベースに接続されていません。');
+        return;
+      }
+
+      const categoryVal = document.getElementById('f_category').value.trim();
+      const nameVal = document.getElementById('f_name').value.trim();
+      const serialVal = document.getElementById('f_serial').value.trim();
+
+      if (!categoryVal || !nameVal || !serialVal) {
+        alert('「分類」「設備名」「識別情報」は必須入力項目です。');
+        return;
+      }
+
+      const docId = document.getElementById('editDocId').value;
+      const record = {
+        no: docId ? document.getElementById('f_no').value : getNextNo(),
+        category: categoryVal,
+        name: nameVal,
+        serial: serialVal,
+        origin: document.getElementById('f_origin').value.trim(),
+        location: document.getElementById('f_location').value.trim(),
+        status: document.getElementById('f_status').value.trim(),
+        handling: document.getElementById('f_handling').value.trim(),
+        manager: document.getElementById('f_manager').value.trim(),
+        period: document.getElementById('f_period').value.trim(),
+        return_date: document.getElementById('f_return_date').value.trim(),
+        cycle: document.getElementById('f_cycle').value.trim(),
+        protection: document.getElementById('f_protection').value.trim(),
+        defense: document.getElementById('f_defense').value.trim(),
+        record: document.getElementById('f_record').value.trim(),
+        note: document.getElementById('f_note').value.trim(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      try {
+        if (docId) {
+          await db.collection("assets").doc(docId).update(record);
+        } else {
+          await db.collection("assets").add(record);
+        }
+        closeModal();
+      } catch (err) {
+        alert("保存に失敗しました: " + err.message);
+      }
+    }
+
+    async function deleteItem(docId) {
+      if (!confirm('このデータを削除してもよろしいですか？')) return;
+      try {
+        await db.collection("assets").doc(docId).delete();
+      } catch (err) {
+        alert("削除に失敗しました: " + err.message);
+      }
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>
