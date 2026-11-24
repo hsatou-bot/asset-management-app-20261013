@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>設備管理台帳システム (Firebase版)</title>
+  <title>設備管理台帳システム (Firebase連携)</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Firebase SDK (v9 compat) -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -27,9 +27,6 @@
     .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
     .status-badge.online { background: #dcfce7; color: #166534; }
     .status-badge.offline { background: #fee2e2; color: #991b1b; }
-    .config-card { background: #fff; padding: 14px 18px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 20px; }
-    .config-card summary { font-weight: 600; cursor: pointer; color: var(--primary); }
-    .config-card textarea { width: 100%; height: 90px; margin-top: 10px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 12px; }
     .btn { padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: 0.2s; }
     .btn-primary { background: var(--primary); color: #fff; }
     .btn-primary:hover { background: var(--primary-hover); }
@@ -46,6 +43,7 @@
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
     .form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
     .form-group input, .form-group textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+    .empty-state { text-align: center; padding: 40px; color: var(--text-sub); }
   </style>
 </head>
 <body>
@@ -54,24 +52,13 @@
     <div>
       <h1><i class="fa-solid fa-server"></i> 設備管理台帳システム</h1>
       <span id="syncBadge" class="status-badge offline" style="margin-top:6px;">
-        <i class="fa-solid fa-circle" style="font-size:8px;"></i> 未接続
+        <i class="fa-solid fa-circle" style="font-size:8px;"></i> 接続中...
       </span>
     </div>
     <div>
       <button class="btn btn-secondary" onclick="openModal()"><i class="fa-solid fa-plus"></i> 新規設備登録</button>
     </div>
   </div>
-
-  <details class="config-card" id="configSection">
-    <summary><i class="fa-solid fa-gear"></i> Firebase 接続設定 (クリックして展開)</summary>
-    <div style="margin-top:10px;">
-      <p style="font-size:12px; color:var(--text-sub);">Firebaseコンソールで取得した <code>firebaseConfig</code> のJSON（またはJSオブジェクト）を貼り付けてください：</p>
-      <textarea id="configInput" placeholder='{"apiKey": "AIza...", "projectId": "...", ...}'></textarea>
-      <div style="margin-top:8px;">
-        <button class="btn btn-primary" onclick="saveAndConnectFirebase()"><i class="fa-solid fa-link"></i> 接続して保存</button>
-      </div>
-    </div>
-  </details>
 
   <div class="table-container">
     <table id="assetTable">
@@ -84,6 +71,7 @@
       </thead>
       <tbody id="tableBody"></tbody>
     </table>
+    <div id="emptyMessage" class="empty-state" style="display:none;">データが登録されていません。「新規設備登録」ボタンから登録してください。</div>
   </div>
 
   <!-- 登録・編集モーダル -->
@@ -117,52 +105,26 @@
   </div>
 
   <script>
-    // ※Configをコードに直書きしたい場合は以下の波括弧内に貼り付けてください
-    const EMBEDDED_FIREBASE_CONFIG = null;
+    const firebaseConfig = {
+      apiKey: "AIzaSyDKekQzl_Q0EzAt8WDhGMyPFSASVkvL4OM",
+      authDomain: "shisankanri-daicho-web.firebaseapp.com",
+      projectId: "shisankanri-daicho-web",
+      storageBucket: "shisankanri-daicho-web.firebasestorage.app",
+      messagingSenderId: "936797966154",
+      appId: "1:936797966154:web:785d195d36948cf5f9bbb3",
+      measurementId: "G-NY9GKTY7GT"
+    };
 
     let db = null;
     let assets = [];
-    const CONFIG_KEY = 'ledger_firebase_config_raw';
 
     function init() {
-      let config = EMBEDDED_FIREBASE_CONFIG;
-      if (!config) {
-        const stored = localStorage.getItem(CONFIG_KEY);
-        if (stored) {
-          try { config = JSON.parse(stored); } catch (e) {}
-        }
-      }
-      if (config) {
-        document.getElementById('configInput').value = JSON.stringify(config, null, 2);
-        connectFirebase(config);
-      }
-    }
-
-    function saveAndConnectFirebase() {
-      const input = document.getElementById('configInput').value.trim();
-      try {
-        let jsonStr = input;
-        if (!jsonStr.startsWith('{')) {
-          jsonStr = jsonStr.substring(jsonStr.indexOf('{'), jsonStr.lastIndexOf('}') + 1);
-        }
-        // オブジェクトのキーをJSON形式に補正
-        jsonStr = jsonStr.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":').replace(/'/g, '"');
-        const config = JSON.parse(jsonStr);
-        localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-        connectFirebase(config);
-      } catch (e) {
-        alert("設定の解析に失敗しました。Firebase Config の形式を確認してください。");
-      }
-    }
-
-    function connectFirebase(config) {
       try {
         if (!firebase.apps.length) {
-          firebase.initializeApp(config);
+          firebase.initializeApp(firebaseConfig);
         }
         db = firebase.firestore();
 
-        // リアルタイムリスナーの登録 (onSnapshot)
         db.collection("assets").orderBy("no", "asc").onSnapshot((snapshot) => {
           assets = [];
           snapshot.forEach((doc) => {
@@ -172,28 +134,36 @@
           updateBadge(true);
         }, (error) => {
           console.error("Firestore同期エラー:", error);
-          updateBadge(false);
+          updateBadge(false, error.message);
         });
       } catch (err) {
-        console.error("Firebase初期化エラー:", err);
-        updateBadge(false);
+        console.error("初期化エラー:", err);
+        updateBadge(false, err.message);
       }
     }
 
-    function updateBadge(isOnline) {
+    function updateBadge(isOnline, errMsg = "") {
       const badge = document.getElementById('syncBadge');
       if (isOnline) {
         badge.className = "status-badge online";
         badge.innerHTML = '<i class="fa-solid fa-circle" style="font-size:8px;"></i> クラウド同期中 (リアルタイム)';
       } else {
         badge.className = "status-badge offline";
-        badge.innerHTML = '<i class="fa-solid fa-circle" style="font-size:8px;"></i> 未接続';
+        badge.innerHTML = `<i class="fa-solid fa-circle" style="font-size:8px;"></i> 未接続 ${errMsg ? `(${errMsg})` : ''}`;
       }
     }
 
     function renderTable() {
       const tbody = document.getElementById('tableBody');
+      const emptyMsg = document.getElementById('emptyMessage');
       tbody.innerHTML = '';
+      
+      if (assets.length === 0) {
+        emptyMsg.style.display = 'block';
+        return;
+      }
+      emptyMsg.style.display = 'none';
+
       assets.forEach((item) => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -261,7 +231,7 @@
 
     async function submitData() {
       if (!db) {
-        alert('Firebase に接続されていません。接続設定を行ってください。');
+        alert('データベースに接続されていません。');
         return;
       }
       const docId = document.getElementById('editDocId').value;
